@@ -1,0 +1,129 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+from sklearn.model_selection import train_test_split
+
+# ================= 1. 环境自检 =================
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f">>> 当前运行设备: {device}")
+
+# ================= 2. 深度学习数据集定义 =================
+class CornDataSet(Dataset):
+    def __init__(self, features, labels):
+        # 将数据转为张量并推送到显卡(GPU)或CPU
+        self.features = torch.tensor(features.values, dtype=torch.float32).to(device)
+        self.labels = torch.tensor(labels.values, dtype=torch.float32).reshape(-1, 1).to(device)
+
+    def __len__(self):
+        return len(self.features)
+
+    def __getitem__(self, idx):
+        return self.features[idx], self.labels[idx]
+
+# ================= 3. 全连接神经网络架构 =================
+class CornNet(nn.Module):
+    def __init__(self, input_size):
+        super(CornNet, self).__init__()
+        self.main = nn.Sequential(
+            nn.Linear(input_size, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1) # 预测一个数值
+        )
+    def forward(self, x):
+        return self.main(x)
+
+# ================= 4. 主程序运行 =================
+if __name__ == "__main__":
+    # 设定文件名 (根据你提供的信息)
+    file_name = "玉米的近红外光谱数据.xlsx"
+    
+    # A. 载入数据并处理异常
+    if not os.path.exists(file_name):
+        print(f"!!! 错误：在当前文件夹下没找到文件 '{file_name}'")
+        print("请确认文件名是否完全一致，或后缀名是否为 .xlsx")
+        exit()
+
+    print(f"正在读取数据: {file_name}...")
+    df = pd.read_excel(file_name)
+    
+    # 按照作业要求：前4列是成分，后面是光谱
+    y = df.iloc[:, 0] # 默认预测第一列：水分 (Moisture)
+    X = df.iloc[:, 4:] # 光谱特征
+    
+    # 归一化 (Min-Max Normalization)
+    X_norm = (X - X.min()) / (X.max() - X.min())
+    
+    # 划分数据集 (70%训练, 30%测试)
+    X_train, X_test, y_train, y_test = train_test_split(X_norm, y, test_size=0.3, random_state=42)
+    
+    # B. 准备加载器
+    train_loader = DataLoader(CornDataSet(X_train, y_train), batch_size=8, shuffle=True)
+    test_loader = DataLoader(CornDataSet(X_test, y_test), batch_size=1)
+
+    # C. 初始化模型
+    model = CornNet(input_size=X_train.shape[1]).to(device)
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+    # D. 训练过程
+    epochs = 300
+    loss_history = []
+    print("开始训练...")
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        running_loss = 0.0
+        for inputs, targets in train_loader:
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+        
+        avg_loss = running_loss / len(train_loader)
+        loss_history.append(avg_loss)
+        
+        if epoch % 50 == 0:
+            print(f"轮次 [{epoch}/{epochs}], 误差: {avg_loss:.6f}")
+
+    # E. 结果展示
+    model.eval()
+    y_pred, y_true = [], []
+    with torch.no_grad():
+        for inputs, targets in test_loader:
+            out = model(inputs)
+            y_pred.append(out.item())
+            y_true.append(targets.item())
+
+    # 绘图
+    plt.figure(figsize=(10, 4))
+    
+    # 训练损失曲线
+    plt.subplot(1, 2, 1)
+    plt.plot(loss_history, label='Loss')
+    plt.title('Training Process')
+    plt.xlabel('Epoch')
+    plt.ylabel('MSE Loss')
+    
+    # 预测效果对比
+    plt.subplot(1, 2, 2)
+    plt.scatter(y_true, y_pred, alpha=0.7)
+    plt.plot([min(y_true), max(y_true)], [min(y_true), max(y_true)], 'r--')
+    plt.title('Prediction Accuracy')
+    plt.xlabel('Actual')
+    plt.ylabel('Predicted')
+    
+    plt.tight_layout()
+    plt.savefig("Corn_Result.png") # 自动保存结果图
+    plt.show()
+    
+    print("\n>>> 任务完成！")
+    print("1. 结果图已保存为 'Corn_Result.png'")
+    print("2. 如果预测点都在红虚线附近，说明模型非常准！")
